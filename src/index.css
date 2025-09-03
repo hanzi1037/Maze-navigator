@@ -1,0 +1,11 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* You can keep or remove other existing CSS rules below these lines */
+body {
+  margin: 0;
+  font-family: 'Inter', sans-serif; /* Ensure Inter is applied */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
