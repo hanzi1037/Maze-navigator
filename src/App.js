@@ -36,10 +36,16 @@
     };
 
     // Component for a single maze cell
-    const Cell = React.memo(({ type, onMouseDown, onMouseEnter, isPath, isVisited, isRobot }) => {
+    const Cell = React.memo(({ type, onMouseDown, onMouseEnter, isPath, isVisited, isRobot, row, col, nodeInfo, showNodeMarkings, onNodeClick }) => {
     let bgColor = 'bg-gray-200'; // Default empty cell
     let textColor = 'text-gray-800';
     let icon = '';
+    let nodeNumber = '';
+    let nodeType = '';
+
+    // Get node information if available
+    const nodeKey = `${row},${col}`;
+    const currentNodeInfo = nodeInfo.get(nodeKey);
 
     if (isRobot) {
         icon = '🤖'; // Robot emoji
@@ -77,15 +83,55 @@
         }
     }
 
+    // Add node marking information
+    if (showNodeMarkings && currentNodeInfo) {
+        nodeNumber = currentNodeInfo.order || '';
+        nodeType = currentNodeInfo.type || '';
+        
+        // Add visual indicators for different node types
+        if (currentNodeInfo.type === 'root') {
+            bgColor = 'bg-purple-600';
+            textColor = 'text-white';
+        } else if (currentNodeInfo.type === 'parent') {
+            bgColor = 'bg-indigo-500';
+            textColor = 'text-white';
+        } else if (currentNodeInfo.type === 'child') {
+            bgColor = 'bg-cyan-500';
+            textColor = 'text-white';
+        } else if (currentNodeInfo.type === 'leaf') {
+            bgColor = 'bg-orange-500';
+            textColor = 'text-white';
+        }
+    }
+
+    const handleClick = (e) => {
+        if (showNodeMarkings && currentNodeInfo) {
+            e.stopPropagation();
+            onNodeClick(currentNodeInfo, row, col);
+        } else {
+            onMouseDown();
+        }
+    };
+
     return (
         <div
-        className={`flex items-center justify-center w-full h-full cursor-pointer transition-colors duration-100 ${bgColor} ${textColor} text-xl select-none`}
-        onMouseDown={onMouseDown}
+        className={`flex flex-col items-center justify-center w-full h-full cursor-pointer transition-colors duration-100 ${bgColor} ${textColor} text-xl select-none relative`}
+        onMouseDown={handleClick}
         onMouseEnter={onMouseEnter}
         draggable="false"
         style={{ boxShadow: 'inset 0 0 0 1px rgba(209, 213, 219, 1)' }}
         >
         {icon}
+        {showNodeMarkings && nodeNumber && (
+            <div className="absolute top-0 left-0 text-xs bg-black bg-opacity-50 text-white px-1 rounded-br">
+                {nodeNumber}
+            </div>
+        )}
+        {showNodeMarkings && nodeType && (
+            <div className="absolute bottom-0 right-0 text-xs bg-black bg-opacity-50 text-white px-1 rounded-tl">
+                {nodeType.charAt(0).toUpperCase()}
+            </div>
+        )}
         </div>
     );
     });
@@ -160,6 +206,11 @@
     const [isPathfinding, setIsPathfinding] = useState(false);
     const [robotPosition, setRobotPosition] = useState(null);
     const [selectedAlgorithm, setSelectedAlgorithm] = useState('DFS');
+    
+    // Node marking states
+    const [nodeInfo, setNodeInfo] = useState(new Map()); // Map of node coordinates to node information
+    const [showNodeMarkings, setShowNodeMarkings] = useState(false);
+    const [selectedNode, setSelectedNode] = useState(null); // Currently selected node for details
 
     // New state for line drawing functionality
     const [startDrawingCell, setStartDrawingCell] = useState(null);
@@ -246,6 +297,15 @@
         setDisplayName(defaultProfile.displayName);
         }
     }, [getUserProfileDocRef]);
+
+    // Function to handle node click for showing details
+    const handleNodeClick = useCallback((nodeInfo, row, col) => {
+        setSelectedNode({
+            ...nodeInfo,
+            row,
+            col
+        });
+    }, []);
 
     // Function to erase a single wall
     const eraseWall = useCallback((row, col) => {
@@ -545,6 +605,8 @@
         setTimeTaken(null); // Reset stats
         setBlocksCovered(null); // Reset stats
         setSelectedMazeId(null); // Clear selected maze ID
+        setNodeInfo(new Map()); // Reset node information
+        setSelectedNode(null); // Clear selected node
         setMessage('Click and drag to draw walls. Use buttons below to change mode.');
         if (pathfindingTimeoutRef.current) {
         clearTimeout(pathfindingTimeoutRef.current);
@@ -809,24 +871,37 @@
         setRobotPosition(null);
         setTimeTaken(null); // Reset stats at the beginning of pathfinding
         setBlocksCovered(null); // Reset stats
+        setNodeInfo(new Map()); // Reset node information
 
         const startTime = Date.now(); // Record start time
 
         const stack = [];
         const visited = new Set();
         const parentMap = new Map();
+        const nodeInfoMap = new Map();
 
         stack.push(startNode);
         visited.add(`${startNode.row},${startNode.col}`);
+        
+        // Mark start node as root
+        const startKey = `${startNode.row},${startNode.col}`;
+        nodeInfoMap.set(startKey, {
+            type: 'root',
+            order: 1,
+            parent: null,
+            children: []
+        });
 
         const visitedNodesForAnimation = [];
         const edges = [];
+        let nodeOrder = 2;
 
-        const animateSearch = (s, v, pMap) => {
+        const animateSearch = (s, v, pMap, nMap) => {
         if (s.length === 0) {
             const endTime = Date.now();
             setTimeTaken(endTime - startTime); // Calculate time taken
             setBlocksCovered(visitedNodesForAnimation.length); // Set blocks covered
+            setNodeInfo(nMap); // Set final node information
             setMessage('No path found!');
             setIsPathfinding(false);
             setInfoModalTitle("Path Not Found");
@@ -837,6 +912,7 @@
 
         const currentNode = s.pop();
         const { row, col } = currentNode;
+        const currentKey = `${row},${col}`;
 
         if (row === endNode.row && col === endNode.col) {
             const endTime = Date.now(); // Corrected from Date.Now()
@@ -845,6 +921,7 @@
 
             setTimeTaken(finalTimeTaken); // Calculate time taken
             setBlocksCovered(finalBlocksCovered); // Set blocks covered
+            setNodeInfo(nMap); // Set final node information
             const path = reconstructPath(pMap, currentNode);
             setAiPath(path);
             setAiVisited(visitedNodesForAnimation);
@@ -872,6 +949,7 @@
             { dr: 0, dc: 1 },  // Right
         ];
 
+        let hasChildren = false;
         for (let i = directions.length - 1; i >= 0; i--) {
             const dir = directions[i];
             const newRow = row + dir.dr;
@@ -889,11 +967,33 @@
             s.push({ row: newRow, col: newCol });
             pMap.set(neighborKey, currentNode);
             edges.push({ from: { row, col }, to: { row: newRow, col: newCol } });
+            
+            // Add child node information
+            nMap.set(neighborKey, {
+                type: 'child',
+                order: nodeOrder++,
+                parent: { row, col },
+                children: []
+            });
+            
+            // Update parent's children list
+            if (nMap.has(currentKey)) {
+                nMap.get(currentKey).children.push({ row: newRow, col: newCol });
+            }
+            
+            hasChildren = true;
             }
         }
 
+        // Update current node type if it has children
+        if (nMap.has(currentKey) && hasChildren) {
+            nMap.get(currentKey).type = 'parent';
+        } else if (nMap.has(currentKey) && !hasChildren) {
+            nMap.get(currentKey).type = 'leaf';
+        }
+
         setAiEdges([...edges]);
-        pathfindingTimeoutRef.current = setTimeout(() => animateSearch(s, v, pMap), 20);
+        pathfindingTimeoutRef.current = setTimeout(() => animateSearch(s, v, pMap, nMap), 20);
         };
 
         const reconstructPath = (pMap, targetNode) => {
@@ -908,7 +1008,7 @@
         };
 
         setAiEdges([]);
-        animateSearch(stack, visited, parentMap);
+        animateSearch(stack, visited, parentMap, nodeInfoMap);
     }, [grid, startNode, endNode, user, selectedMazeId, userProfile, recordLeaderboardEntry, updateMazeSolveStats, animateRobotPath]);
 
     // --- Breadth-First Search (BFS) for shortest path on unweighted grids ---
@@ -926,6 +1026,7 @@
         setRobotPosition(null);
         setTimeTaken(null);
         setBlocksCovered(null);
+        setNodeInfo(new Map()); // Reset node information
 
         const startTime = Date.now();
 
@@ -933,12 +1034,23 @@
         let queueIndex = 0;
         const visited = new Set();
         const parentMap = new Map();
+        const nodeInfoMap = new Map();
         const visitedNodesForAnimation = [];
         const edges = [];
 
         const startKey = `${startNode.row},${startNode.col}`;
         queue.push(startNode);
         visited.add(startKey);
+        
+        // Mark start node as root
+        nodeInfoMap.set(startKey, {
+            type: 'root',
+            order: 1,
+            parent: null,
+            children: []
+        });
+        
+        let nodeOrder = 2;
 
         const reconstructPath = (pMap, targetNode) => {
         let current = targetNode;
@@ -956,6 +1068,7 @@
             const endTime = Date.now();
             setTimeTaken(endTime - startTime);
             setBlocksCovered(visitedNodesForAnimation.length);
+            setNodeInfo(nodeInfoMap); // Set final node information
             setMessage('No path found!');
             setIsPathfinding(false);
             setInfoModalTitle("Path Not Found");
@@ -966,6 +1079,7 @@
 
         const currentNode = queue[queueIndex++];
         const { row, col } = currentNode;
+        const currentKey = `${row},${col}`;
 
         if (row === endNode.row && col === endNode.col) {
             const endTime = Date.now();
@@ -973,6 +1087,7 @@
             const finalBlocksCovered = visitedNodesForAnimation.length;
             setTimeTaken(finalTimeTaken);
             setBlocksCovered(finalBlocksCovered);
+            setNodeInfo(nodeInfoMap); // Set final node information
             const path = reconstructPath(parentMap, currentNode);
             setAiPath(path);
             setAiVisited(visitedNodesForAnimation);
@@ -998,6 +1113,7 @@
             { dr: 0, dc: 1 },
         ];
 
+        let hasChildren = false;
         for (let i = 0; i < directions.length; i++) {
             const dir = directions[i];
             const newRow = row + dir.dr;
@@ -1010,7 +1126,29 @@
             queue.push({ row: newRow, col: newCol });
             parentMap.set(neighborKey, currentNode);
             edges.push({ from: { row, col }, to: { row: newRow, col: newCol } });
+            
+            // Add child node information
+            nodeInfoMap.set(neighborKey, {
+                type: 'child',
+                order: nodeOrder++,
+                parent: { row, col },
+                children: []
+            });
+            
+            // Update parent's children list
+            if (nodeInfoMap.has(currentKey)) {
+                nodeInfoMap.get(currentKey).children.push({ row: newRow, col: newCol });
             }
+            
+            hasChildren = true;
+            }
+        }
+
+        // Update current node type if it has children
+        if (nodeInfoMap.has(currentKey) && hasChildren) {
+            nodeInfoMap.get(currentKey).type = 'parent';
+        } else if (nodeInfoMap.has(currentKey) && !hasChildren) {
+            nodeInfoMap.get(currentKey).type = 'leaf';
         }
 
         setAiEdges([...edges]);
@@ -1417,6 +1555,11 @@
                         isPath={aiPath.some(node => node.row === rowIndex && node.col === colIndex)}
                         isVisited={aiVisited.some(node => node.row === rowIndex && node.col === colIndex)}
                         isRobot={robotPosition && robotPosition.row === rowIndex && robotPosition.col === colIndex}
+                        row={rowIndex}
+                        col={colIndex}
+                        nodeInfo={nodeInfo}
+                        showNodeMarkings={showNodeMarkings}
+                        onNodeClick={handleNodeClick}
                     />
                     ))
                 )}
@@ -1458,6 +1601,35 @@
                 <p>Last Pathfinding Run Stats:</p>
                 <p>Time Taken: <span className="font-semibold">{timeTaken} ms</span></p>
                 <p>Blocks Covered: <span className="font-semibold">{blocksCovered}</span></p>
+                </div>
+            )}
+
+            {/* Node Details Panel */}
+            {selectedNode && (
+                <div className="bg-white p-4 rounded-xl shadow-xl mt-4 text-center text-gray-700 font-medium max-w-md">
+                <h3 className="text-lg font-bold mb-2">Node Details</h3>
+                <p><span className="font-semibold">Position:</span> ({selectedNode.row}, {selectedNode.col})</p>
+                <p><span className="font-semibold">Type:</span> {selectedNode.type}</p>
+                <p><span className="font-semibold">Order:</span> {selectedNode.order}</p>
+                {selectedNode.parent && (
+                    <p><span className="font-semibold">Parent:</span> ({selectedNode.parent.row}, {selectedNode.parent.col})</p>
+                )}
+                {selectedNode.children && selectedNode.children.length > 0 && (
+                    <div>
+                    <p className="font-semibold">Children:</p>
+                    {selectedNode.children.map((child, index) => (
+                        <span key={index} className="text-sm">
+                        ({child.row}, {child.col}){index < selectedNode.children.length - 1 ? ', ' : ''}
+                        </span>
+                    ))}
+                    </div>
+                )}
+                <button
+                    onClick={() => setSelectedNode(null)}
+                    className="mt-2 px-3 py-1 bg-gray-500 text-white rounded-md text-sm hover:bg-gray-600"
+                >
+                    Close
+                </button>
                 </div>
             )}
 
@@ -1543,6 +1715,13 @@
                 >
                 Clear Maze
                 </button>
+                <button
+                onClick={() => setShowNodeMarkings(!showNodeMarkings)}
+                className={showNodeMarkings ? activeButtonClass : secondaryButtonClass}
+                disabled={isPathfinding}
+                >
+                {showNodeMarkings ? 'Hide Node Info' : 'Show Node Info'}
+                </button>
                 <input
                 type="text"
                 placeholder="Maze Name"
@@ -1579,6 +1758,34 @@
             <p className="mt-8 text-gray-600 text-sm text-center">
                 Note: The AI uses <span className="font-semibold">{selectedAlgorithm}</span> to find a path.
             </p>
+
+            {/* Node Marking Legend */}
+            {showNodeMarkings && (
+                <div className="bg-white p-4 rounded-xl shadow-xl mt-4 text-center text-gray-700 font-medium max-w-md">
+                <h3 className="text-lg font-bold mb-2">Node Marking Legend</h3>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div className="flex items-center justify-center">
+                        <div className="w-4 h-4 bg-purple-600 rounded mr-2"></div>
+                        <span>Root Node</span>
+                    </div>
+                    <div className="flex items-center justify-center">
+                        <div className="w-4 h-4 bg-indigo-500 rounded mr-2"></div>
+                        <span>Parent Node</span>
+                    </div>
+                    <div className="flex items-center justify-center">
+                        <div className="w-4 h-4 bg-cyan-500 rounded mr-2"></div>
+                        <span>Child Node</span>
+                    </div>
+                    <div className="flex items-center justify-center">
+                        <div className="w-4 h-4 bg-orange-500 rounded mr-2"></div>
+                        <span>Leaf Node</span>
+                    </div>
+                </div>
+                <p className="text-xs text-gray-500 mt-2">
+                    Numbers show traversal order. Click nodes to see details.
+                </p>
+                </div>
+            )}
 
             {/* Leaderboard Display */}
             {leaderboardEntries.length > 0 && (
